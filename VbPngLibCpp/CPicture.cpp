@@ -191,7 +191,7 @@ HRESULT CPicture::LoadFromStream(IStream *pStm) {
 
 	bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	bi.bmiHeader.biBitCount = 32;
-	bi.bmiHeader.biHeight = -rc.Width;
+	bi.bmiHeader.biHeight = -rc.Height;
 	bi.bmiHeader.biWidth = rc.Width;
 	bi.bmiHeader.biPlanes = 1;
 
