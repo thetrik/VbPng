@@ -4,6 +4,7 @@
 * text eol=crlf
 
 *.png binary
+*.Png binary
 *.exe binary
 *.dll binary
 *.frx binary
