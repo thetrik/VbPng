@@ -2,3 +2,7 @@
 *.log
 *.sdf
 *.ipch
+*.tlog
+*.lastbuildstate
+*.cache
+ipch/
