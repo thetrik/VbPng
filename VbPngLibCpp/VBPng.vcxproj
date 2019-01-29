@@ -165,6 +165,7 @@
   <ItemGroup>
     <ClCompile Include="CHooker.cpp" />
     <ClCompile Include="CPicture.cpp" />
+    <ClCompile Include="CPicturesServer.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="ldasm\ldasm.cpp" />
     <ClCompile Include="VBPng.cpp" />

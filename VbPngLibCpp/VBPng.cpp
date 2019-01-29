@@ -14,17 +14,20 @@
 #pragma comment(lib, "gdiplus.lib")
 #endif
 
-volatile ULONG g_lCountOfUsers = 0;			// Count of users
-BOOL	g_bIsInitialized	= FALSE;		// If the module already intialized equals TRUE
-ULONG	g_hGdipToken		= NULL;			// GDIplus token
-CHooker	g_cHooker[2];						// Hooker object
+volatile ULONG g_lCountOfUsers	= 0;			// Count of users
+BOOL g_bIsInitialized			= FALSE;		// If the module already intialized equals TRUE
+ULONG g_hGdipToken				= NULL;			// GDIplus token
+CHooker g_cHooker[2];							// Hooker object
+CPicturesServer g_cServer;						// Pictures server
 
 BOOL Initialize() {
 	HMODULE hOleAut				= NULL;
 	pfnOleLoadPictureEx pfnEx	= NULL;
 	pfnOleLoadPicture pfn 		= NULL;
+	BOOL bComInit				= FALSE;
+	BOOL bGdipInit				= FALSE;
 	TCHAR pszAlreadyHooked[2];
-
+	
 	if (g_bIsInitialized) {
 		InterlockedIncrement(&g_lCountOfUsers);
 		return TRUE;
@@ -37,24 +40,46 @@ BOOL Initialize() {
 			return TRUE;
 		}
 	
-	// Initialize GDI+
-	GdiplusStartup(&g_hGdipToken, &GdiplusStartupInput(), NULL);
+	// Initialize COM
+	if (FAILED(CoInitialize(NULL))) {
+		MessageBox(NULL, _T("Unable to initialize COM"), NULL, MB_ICONERROR);
+		goto CleanUp;
+	}
 
+	bComInit = TRUE;
+
+	// Initialize GDI+
+	if (GdiplusStartup(&g_hGdipToken, &GdiplusStartupInput(), NULL) != Ok) {
+		MessageBox(NULL, _T("Unable to initialize GDI+"), NULL, MB_ICONERROR);
+		goto CleanUp;
+	}
+
+	bGdipInit = TRUE;
+
+	// Get oleaut32 handle
 	if (NULL == (hOleAut = GetModuleHandle(_T("oleaut32")))) {
 		if (NULL == (hOleAut = LoadLibrary(_T("oleaut32")))) {
 			MessageBox(NULL, _T("Unable to load oleaut32.dll"), NULL, MB_ICONERROR);
-			return FALSE;
+			goto CleanUp;
 		}
 	}
 
+	// Get OleLoadPictureEx function address
 	if (NULL == (pfnEx = (pfnOleLoadPictureEx)GetProcAddress(hOleAut, "OleLoadPictureEx"))) {
 		MessageBox(NULL, _T("Unable to get the OleLoadPictureEx address"), NULL, MB_ICONERROR);
-		return FALSE;
+		goto CleanUp;
 	}
 	
+	// Get OleLoadPicture function address
 	if (NULL == (pfn = (pfnOleLoadPicture)GetProcAddress(hOleAut, "OleLoadPicture"))) {
 		MessageBox(NULL, _T("Unable to get the OleLoadPicture address"), NULL, MB_ICONERROR);
-		return FALSE;
+		goto CleanUp;
+	}
+
+	// Register PNG server within process
+	if (FAILED(g_cServer.RegisterServer())) {
+		MessageBox(NULL, _T("Unable to register PNG server"), NULL, MB_ICONERROR);
+		goto CleanUp;
 	}
 
 	// Hijack OleLoadPictureEx, OleLoadPicture
@@ -65,10 +90,31 @@ BOOL Initialize() {
 			g_cHooker[0].Unhook();
 	}
 
-	// If other dlls will use this functionaly
+	// If other dlls will use this functionaly set global env variable.
+	// For example, if a EXE file uses static linked module and a dll uses
+	// the dynamic link library we tells we already hook the functions.
+	// In this case dll won't intercept it again
 	if (g_bIsInitialized) {
 		SetEnvironmentVariable(_T("VBPng"), _T("1"));
 		InterlockedIncrement(&g_lCountOfUsers);
+	}
+
+CleanUp:
+
+	if (!g_bIsInitialized) {
+
+		// Revert
+		g_cHooker[0].Unhook();
+		g_cHooker[1].Unhook();
+
+		if (bGdipInit)
+			GdiplusShutdown(g_hGdipToken);
+
+		g_cServer.UnregisterServer();
+		
+		if (bComInit)
+			CoUninitialize();
+
 	}
 
 	return g_bIsInitialized;
@@ -81,14 +127,25 @@ VOID Uninitialize() {
 
 		g_cHooker[0].Unhook();
 		g_cHooker[1].Unhook();
+
+		g_cServer.UnregisterServer();
+		
 		GdiplusShutdown(g_hGdipToken);
 		
+		CoUninitialize();
+
 		SetEnvironmentVariable(_T("VBPng"), _T("0"));
+
+		g_bIsInitialized = FALSE;
+
 	}
+
+	return;
 
 }
 
 HRESULT CanUnloadNow() {
+	// Check usage counter
 	if (g_lCountOfObject)
 		return S_FALSE;
 	else

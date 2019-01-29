@@ -18,7 +18,6 @@ HDC	CPicture::m_hDeskDc				= NULL;
 ITypeLib* CPicture::m_pTypeLib		= NULL;
 CLSID CPicture::m_ClsidPNGEncoder	= CLSID_NULL;
 
-
 // Create stream which contains only PNG data
 HRESULT CPicture::CreatePngStream(IStream *pStm, IStream **pOut) {
 	DWORD dwPngSize	= 0;
@@ -305,8 +304,6 @@ HRESULT STDMETHODCALLTYPE CPicture::QueryInterface(REFIID riid, void  **ppv) {
 		*ppv = (IPersistStream*)this;
 	else if (riid == IID_IConnectionPointContainer)
 		*ppv = (IConnectionPointContainer*)this;
-	else if (riid == IID_IConnectionPointContainer)
-		*ppv = (IDispatch*)this;
 	else
 		hr = E_NOTIMPL;
 
@@ -611,7 +608,8 @@ HRESULT STDMETHODCALLTYPE CPicture::GetClassID(CLSID *pclsid) {
 	if (!pclsid)
 		return E_INVALIDARG;
 
-	*pclsid = CLSID_StdPicture;
+	// Return CLSID of server, it'll create picture objects
+	*pclsid = CLSID_PngPicture;
 
 	return S_OK;
 

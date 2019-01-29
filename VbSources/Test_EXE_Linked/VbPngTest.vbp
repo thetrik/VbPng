@@ -1,5 +1,5 @@
 Type=Exe
-Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#..\..\..\..\..\..\..\..\Windows\SysWOW64\stdole2.tlb#OLE Automation
+Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#..\..\..\..\..\..\..\..\..\Windows\SysWOW64\stdole2.tlb#OLE Automation
 Form=frmMain.frm
 Object={6B7E6392-850A-101B-AFC0-4210102A8DA7}#1.5#0; comctl32.Ocx
 ResFile32="VbPngTest.RES"

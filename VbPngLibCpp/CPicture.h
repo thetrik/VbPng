@@ -7,12 +7,59 @@
 
 #include "stdafx.h"
 #include <ocidl.h>
+#include <initguid.h>
 
 struct PNG_Chunk_Header {
 	ULONG Length;
 	ULONG Type;
 };
 
+// PNG picture CLSID {9D18EF1B-7C5F-4489-8CBC-0CDFDE9F3D46}
+DEFINE_GUID(CLSID_PngPicture, 
+	0x9d18ef1b, 0x7c5f, 0x4489, 0x8c, 0xbc, 0xc, 0xdf, 0xde, 0x9f, 0x3d, 0x46);
+
+
+// 
+// Represents class factory for CPicture objects created by CoCreateInstance
+// We need to use that class because a picture object can be created via
+// CoCreateInstance function (for example if you read the picture property
+// from PropertyBag).
+//
+
+class CPicturesServer : IClassFactory {
+
+private:
+
+	ULONG			m_RefCounter;			// Reference counter
+	volatile ULONG	m_uLockCounter;			// Lock counter
+	DWORD			m_dwCookie;				// Registration cookie
+	BOOL			m_bIsInitialized;
+
+	CPicturesServer (const CPicturesServer&);
+	CPicturesServer& operator = (const CPicturesServer&);
+
+public:
+
+	CPicturesServer();
+	~CPicturesServer();
+
+	HRESULT RegisterServer();		// Register this server
+	HRESULT UnregisterServer();		// Unregister
+
+	// IUnknown implementation
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void **);
+	ULONG STDMETHODCALLTYPE AddRef();
+	ULONG STDMETHODCALLTYPE Release();
+
+	// IClassFactory implementation
+	HRESULT STDMETHODCALLTYPE CreateInstance(IUnknown *, const IID &,void **);
+	HRESULT STDMETHODCALLTYPE LockServer(BOOL);
+
+};
+
+//
+// Represents PNG picture
+//
 class CPicture : IPicture, IPersistStream, IConnectionPointContainer, IDispatch {
 
 private:
