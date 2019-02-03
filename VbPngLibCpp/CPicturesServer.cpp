@@ -20,7 +20,7 @@ HRESULT CPicturesServer::RegisterServer() {
 	HRESULT	hr = S_OK;
 
 	// Register this server within process
-	if (FAILED(hr = CoRegisterClassObject(CLSID_PngPicture, this, CLSCTX_INPROC_SERVER, 
+	if (FAILED(hr = CoRegisterClassObject(CLSID_ExtPicture, this, CLSCTX_INPROC_SERVER, 
 									 REGCLS_MULTIPLEUSE, &m_dwCookie))) 
 		goto CleanUp;
 

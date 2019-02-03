@@ -18,14 +18,14 @@ the LinkSwitches option like [vbpng.lib -ENTRY:mainCRTStartup].
 
 How does it work?
 
-This library hijacks the OleLoadPictureEx function. When a caller calls
-this one it checks the status and if the function failed it attempts to
-load the image using GDI+. If successful, it creates an object which 
-implements all the interfaces like the original one excepting 
-IConnectionPointContainer interface. This library keeps track of the 
-object references so you shouldn't unload the dll while any object is 
-active. To check if the library can be unloaded call the CanUnloadNow
-function. If it returns S_OK the library can be unloaded.
+This library hijacks the OleLoadPictureEx/OleLoadPicture/OleIconToCursor
+functions. When a caller calls this one it checks the status and if the 
+function failed it attempts to load the image using GDI+. If successful, 
+it creates an object which implements all the interfaces like the original 
+one excepting IConnectionPointContainer interface. This library keeps 
+track of the object references so you shouldn't unload the dll while any 
+object is active. To check if the library can be unloaded call the 
+CanUnloadNow function. If it returns S_OK the library can be unloaded.
 
 This library uses the instruction length-disassembler by Ms-Rem 
 (Ms-Rem@yandex.ru) ICQ 286370715 with some modification.

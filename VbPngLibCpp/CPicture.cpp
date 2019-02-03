@@ -4,7 +4,6 @@
 // by The trick
 // 2019
 
-
 #include "CPicture.h"
 #include "VBPng.h"
 #include <intrin.h>
@@ -14,124 +13,50 @@
 #pragma comment(lib, "Msimg32.lib")
 
 // Static variables
-HDC	CPicture::m_hDeskDc				= NULL;
-ITypeLib* CPicture::m_pTypeLib		= NULL;
-CLSID CPicture::m_ClsidPNGEncoder	= CLSID_NULL;
+HDC	CPicture::m_hDeskDc			= NULL;
+ITypeLib* CPicture::m_pTypeLib	= NULL;
 
-// Create stream which contains only PNG data
-HRESULT CPicture::CreatePngStream(IStream *pStm, IStream **pOut) {
-	DWORD dwPngSize	= 0;
-	IStream *pRet	= NULL;
-	HRESULT hr		= S_OK;
-	PBYTE pBuffer	= NULL;
-	ULARGE_INTEGER uOrigin;
-	ULARGE_INTEGER uNewPos;
-	ULARGE_INTEGER uSize;
-	LARGE_INTEGER li;
-	ULONG ulRead;
-	PNG_Chunk_Header tChunkHdr;
+//
+// CPictureInternal implementation
+//
+CPictureInternal::CPictureInternal() {
 
-	*pOut = NULL;
+	m_hBitmap = NULL;
+	m_Height = 0;
+	m_Width = 0;
+	m_pStmOriginalData = NULL;
 
-	li.QuadPart = 0;
-
-	if (FAILED(hr = pStm->Seek(li, STREAM_SEEK_CUR, &uOrigin)))
-		return hr;
-	
-	if (FAILED(hr = pStm->Read(&li, 8, &ulRead)))
-		goto CleanUp;
-
-	// ‰PNG/r/n
-	if (li.QuadPart != 0xA1A0A0D474E5089) {
-		hr = CTL_E_INVALIDPICTURE;
-		goto CleanUp;
-	}
-
-	dwPngSize = 8;	// Signature size
-
-	do {
-
-		if (FAILED(hr = pStm->Read(&tChunkHdr, sizeof(tChunkHdr), &ulRead)))
-			goto CleanUp;
-		
-		if (tChunkHdr.Length < 0) {
-			hr = CTL_E_INVALIDPICTURE;
-			goto CleanUp;
-		}
-
-		li.QuadPart = _byteswap_ulong(tChunkHdr.Length) + 4;	// data + crc
-
-		if (FAILED(hr = pStm->Seek(li, STREAM_SEEK_CUR, &uNewPos)))
-			goto CleanUp;
-		
-		dwPngSize += li.QuadPart + sizeof(tChunkHdr);
-
-	} while(tChunkHdr.Type != 'DNEI');
-
-	li.QuadPart = uOrigin.QuadPart;
-
-	if (FAILED(hr = pStm->Seek(li, STREAM_SEEK_SET, &uOrigin)))
-		goto CleanUp;
-
-	// Create buffer for copying
-	pBuffer = new (std::nothrow) BYTE[dwPngSize];
-
-	if (!pBuffer) {
-		hr = E_OUTOFMEMORY;
-		goto CleanUp;
-	}
-
-	if (FAILED(hr = CreateStreamOnHGlobal(NULL, TRUE, &pRet)))
-		goto CleanUp;
-
-	uSize.QuadPart = dwPngSize;
-	
-	if (FAILED(hr = pStm->Read(pBuffer, dwPngSize, &ulRead))) {
-		goto CleanUp;
-	}
-
-	if (FAILED(hr = pRet->Write(pBuffer, dwPngSize, &ulRead))) {
-		goto CleanUp;
-	}
-
-	uSize.QuadPart = dwPngSize;
-
-	if (FAILED(hr = pRet->SetSize(uSize))) {
-		goto CleanUp;
-	}
-
-	li.QuadPart = 0;
-
-	if (FAILED(hr = pRet->Seek(li, STREAM_SEEK_SET, &uNewPos))) {
-		goto CleanUp;
-	}
-
-	*pOut = pRet;
-
-CleanUp:
-
-	if (FAILED(hr)) {
-
-		if (pRet)
-			pRet->Release();
-
-	}
-
-	if (pBuffer)
-		delete pBuffer;
-
-	return hr;
+	return;
 
 }
 
-VOID CPicture::Clear() {
-		
-	if (m_hBitmap)
-		DeleteObject(m_hBitmap);
-
-	m_hBitmap = NULL;
-	m_hCurDc = NULL;
+CPictureInternal::~CPictureInternal() {
 	
+	if (m_pStmOriginalData)
+		m_pStmOriginalData->Release();
+
+	return;
+
+}
+
+LONG CPictureInternal::GetWidth() const {
+	return m_Width;
+}
+
+LONG CPictureInternal::GetHeight() const {
+	return m_Height;
+}
+
+HANDLE CPictureInternal::GetHandle() const {
+	return m_hBitmap;
+}
+
+IStream* CPictureInternal::GetOriginalStream() const {
+	return m_pStmOriginalData;
+}
+
+VOID CPictureInternal::FreeOriginalData() {
+
 	if (m_pStmOriginalData)
 		m_pStmOriginalData->Release();
 
@@ -140,15 +65,27 @@ VOID CPicture::Clear() {
 	return;
 }
 
+// 
+// CPicture implementation
+//
+
+// Clear data
+VOID CPicture::Clear() {
+		
+	if (m_pPicture)
+		delete m_pPicture;
+
+	m_pPicture = NULL;
+	m_hCurDc = NULL;
+
+	return;
+}
+
 CPicture::CPicture() {
 
-	m_hBitmap = NULL;
+	m_pPicture = NULL;
 	m_hCurDc = NULL;
-	m_Height = 0;
-	m_Width = 0;
 	m_pTypeInfo = NULL;
-	m_bKeepOriginalFormat = TRUE;
-	m_pStmOriginalData = NULL;
 	m_RefCounter = 0;
 
 	InterlockedIncrement((volatile long*)&g_lCountOfObject);
@@ -157,75 +94,40 @@ CPicture::CPicture() {
 
 }
 
-HRESULT CPicture::LoadFromStream(IStream *pStm) {
-	HRESULT	hr			= S_OK;
-	IStream *pPngStm	= NULL;
+HRESULT CPicture::LoadFromStream(IStream *pStm, BOOL bKeepOriginal, DWORD xSizeDesired, DWORD ySizeDesired, DWORD dwFlags) {
+	DWORD dwSignature	= 0;
+	HRESULT hr			= S_OK;
+	CPictureInternal *pPic	= NULL;
+	LARGE_INTEGER liPos;
 
-	// Extract PNG part from stream
-	if (FAILED(hr = CreatePngStream(pStm, &pPngStm))) 
+	// Check the stream type by the file signature
+	if (FAILED(hr = pStm->Read(&dwSignature, 4, NULL)))
 		return hr;
 
-	// Load bitmap from stream
-	Bitmap cBitmap(pPngStm);
+	liPos.QuadPart = -4;
 
-	if (cBitmap.GetLastStatus() != Ok)  {
-		hr = CTL_E_INVALIDPICTURE;
-		goto CleanUp;
-	}
+	pStm->Seek(liPos, STREAM_SEEK_CUR, NULL);
 
-	// Convert to DIB
-	Rect rc(0, 0, cBitmap.GetWidth(), cBitmap.GetHeight());
-	BitmapData	tBitmapData;
-
-	memset(&tBitmapData, 0, sizeof(BitmapData));
-
-	if (cBitmap.LockBits(&rc, ImageLockModeRead, PixelFormat32bppPARGB, &tBitmapData) != Ok) {
+	if (dwSignature == 'GNP\x89') {
+		// Create PNG
+		pPic = new (std::nothrow) CPNGPicture;
+	} else if (dwSignature == 0x10000 || dwSignature == 0x20000 || dwSignature == 'FFIR') {
+		// Create ICO
+		pPic = new (std::nothrow) CICOPicture();
+	} else
+		return CTL_E_INVALIDPICTURE;
+	
+	if (pPic)
+		hr = pPic->Load(pStm, xSizeDesired, ySizeDesired, dwFlags, bKeepOriginal);
+	else
 		hr = E_OUTOFMEMORY;
-		goto CleanUp;
+
+	if (SUCCEEDED(hr)) {
+		Clear();
+		m_pPicture = pPic;
+	} else {
+		delete pPic;
 	}
-
-	BITMAPINFO bi;
-
-	memset(&bi, 0, sizeof(BITMAPINFO));
-
-	bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	bi.bmiHeader.biBitCount = 32;
-	bi.bmiHeader.biHeight = -rc.Height;
-	bi.bmiHeader.biWidth = rc.Width;
-	bi.bmiHeader.biPlanes = 1;
-
-	HDC hdc = GetDC(NULL);
-	PBYTE pbPixels = NULL;
-	HBITMAP hSection = CreateDIBSection(hdc, &bi, DIB_RGB_COLORS, (void**)&pbPixels, NULL, 0);
-	ReleaseDC(NULL, hdc);
-
-	if (!hSection) {
-		hr = E_OUTOFMEMORY;
-		goto CleanUp;
-	}
-
-	memcpy(pbPixels, tBitmapData.Scan0, tBitmapData.Height * tBitmapData.Stride);
-
-	// Set properties
-
-	Clear();
-
-	m_Width = rc.Width;
-	m_Height = rc.Height;
-	m_hBitmap = hSection;
-
-	if (m_bKeepOriginalFormat) {
-		m_pStmOriginalData = pPngStm;
-		pPngStm->AddRef();
-	}
-
-CleanUp:
-
-	if (tBitmapData.Scan0)
-		cBitmap.UnlockBits(&tBitmapData);
-
-	if (pPngStm) 
-		pPngStm->Release();
 
 	return hr;
 
@@ -253,6 +155,8 @@ CPicture::~CPicture() {
 	m_pTypeInfo = NULL;
 
 	Clear();
+
+	return;
 }
 
 LONG CPicture::HimetricToPixelsX(LONG l) {
@@ -331,9 +235,15 @@ ULONG STDMETHODCALLTYPE CPicture::Release() {
 
 }
 
+// 
+// IPicture implementation
+//
 HRESULT STDMETHODCALLTYPE CPicture::get_Handle(OLE_HANDLE *pRet) {
 
-	*pRet = (OLE_HANDLE)m_hBitmap;
+	if (!m_pPicture)
+		return E_UNEXPECTED;
+
+	*pRet = (OLE_HANDLE)m_pPicture->GetHandle();
 	return S_OK;
 
 }
@@ -344,17 +254,32 @@ HRESULT STDMETHODCALLTYPE CPicture::get_hPal(OLE_HANDLE *pRet) {
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::get_Type(SHORT *pRet) {
-	*pRet = PICTYPE_BITMAP;
+
+	if (!m_pPicture)
+		return E_UNEXPECTED;
+
+	*pRet = m_pPicture->GetType();
+
 	return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::get_Width(OLE_XSIZE_HIMETRIC *pRet) {
-	*pRet = PixelsToHimetricX(m_Width);
+
+	if (!m_pPicture)
+		return E_UNEXPECTED;
+
+	*pRet = PixelsToHimetricX(m_pPicture->GetWidth());
+
 	return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::get_Height(OLE_YSIZE_HIMETRIC *pRet) {
-	*pRet = PixelsToHimetricY(m_Height);
+
+	if (!m_pPicture)
+		return E_UNEXPECTED;
+
+	*pRet = PixelsToHimetricY(m_pPicture->GetHeight());
+
 	return S_OK;
 }
 
@@ -369,7 +294,10 @@ HRESULT STDMETHODCALLTYPE CPicture::get_CurDC(HDC *pHdc) {
 
 HRESULT STDMETHODCALLTYPE CPicture::SelectPicture(HDC hDCIn, HDC *phDCOut, OLE_HANDLE *phBmpOut) {
 
-	HANDLE hPrev = SelectObject(hDCIn, m_hBitmap);
+	if (!m_pPicture)
+		return E_FAIL;
+
+	HANDLE hPrev = SelectObject(hDCIn, m_pPicture->GetHandle());
 
 	if (phDCOut)
 		*phDCOut = m_hCurDc;
@@ -384,24 +312,21 @@ HRESULT STDMETHODCALLTYPE CPicture::SelectPicture(HDC hDCIn, HDC *phDCOut, OLE_H
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::get_KeepOriginalFormat(BOOL *bKeep) {
-	*bKeep = m_bKeepOriginalFormat;
+	*bKeep = (BOOL)m_pPicture->GetOriginalStream();
 	return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::put_KeepOriginalFormat(BOOL bKeep) {
 
-	if (bKeep && m_hBitmap) 
-		if (!m_pStmOriginalData)
+	if (bKeep && m_pPicture) 
+		if (!m_pPicture->GetOriginalStream())
 			return E_FAIL;
 	else {
 
-		if (m_pStmOriginalData) 
-			m_pStmOriginalData->Release();
+		if (m_pPicture->GetOriginalStream()) 
+			m_pPicture->FreeOriginalData();
 
-		m_pStmOriginalData = NULL;
 	}
-
-	m_bKeepOriginalFormat = bKeep;
 
 	return S_OK;
 }
@@ -421,14 +346,15 @@ HRESULT STDMETHODCALLTYPE CPicture::SaveAsFile(LPSTREAM pStream, BOOL fSaveMemCo
 	PBYTE pBuffer	= NULL;
 	LARGE_INTEGER liPos;
 	ULARGE_INTEGER uiNewPos;
-	STATSTG tStat;
-	DIBSECTION dib;
 
-	if (m_bKeepOriginalFormat && fSaveMemCopy) {
+	// Check if original data is available
+	pStm = m_pPicture->GetOriginalStream();
 
+	if (pStm && !fSaveMemCopy) {
+		
 		liPos.QuadPart = 0;
 
-		if (FAILED(hr = m_pStmOriginalData->Seek(liPos, STREAM_SEEK_END, &uiNewPos)))
+		if (FAILED(hr = pStm->Seek(liPos, STREAM_SEEK_END, &uiNewPos)))
 			goto CleanUp;
 
 		pBuffer = new (std::nothrow) BYTE [uiNewPos.LowPart];
@@ -437,10 +363,10 @@ HRESULT STDMETHODCALLTYPE CPicture::SaveAsFile(LPSTREAM pStream, BOOL fSaveMemCo
 			goto CleanUp;
 		}
 
-		if (FAILED(hr = m_pStmOriginalData->Seek(liPos, STREAM_SEEK_SET, NULL)))
+		if (FAILED(hr = pStm->Seek(liPos, STREAM_SEEK_SET, NULL)))
 			goto CleanUp;
 
-		if (FAILED(hr = m_pStmOriginalData->Read(pBuffer, uiNewPos.LowPart, &liPos.LowPart)))
+		if (FAILED(hr = pStm->Read(pBuffer, uiNewPos.LowPart, &liPos.LowPart)))
 			goto CleanUp;
 
 		if (FAILED(hr = pStream->Write(pBuffer, uiNewPos.LowPart, (ULONG*)pCbSize)))
@@ -448,98 +374,7 @@ HRESULT STDMETHODCALLTYPE CPicture::SaveAsFile(LPSTREAM pStream, BOOL fSaveMemCo
 
 	} else {
 
-		if (!GetObject(m_hBitmap, sizeof(DIBSECTION), &dib)) {
-			hr = STG_E_CANTSAVE;
-			goto CleanUp;
-		}
-
-		// Create temporary stream
-		if (FAILED(hr = CreateStreamOnHGlobal(NULL, TRUE, &pStm))) 
-			return hr;
-
-		Bitmap cBitmap(dib.dsBm.bmWidth, dib.dsBm.bmHeight, dib.dsBm.bmWidthBytes, 
-					   PixelFormat32bppPARGB, (PBYTE)dib.dsBm.bmBits);
-
-		if (cBitmap.GetLastStatus() != Ok) {
-			hr = STG_E_CANTSAVE;
-			goto CleanUp;
-		}
-
-		if (memcmp(&m_ClsidPNGEncoder, &IID_NULL, sizeof(CLSID)) == 0) {
-
-			// Init PNG encoder clsid
-			PBYTE pCodecsBuffer			= NULL;
-			ImageCodecInfo *pCodecInfo	= NULL;
-			BOOL bFound					= FALSE;
-			UINT uNumEncoders			= 0;
-			UINT uSize					= 0;
-
-			if (GetImageEncodersSize(&uNumEncoders, &uSize) != Ok) {
-				hr = STG_E_CANTSAVE;
-				goto CleanUp;
-			}
-
-			pCodecsBuffer = new (std::nothrow) BYTE[uSize];
-
-			if (!pCodecsBuffer) {
-				hr = E_OUTOFMEMORY;
-				goto CleanUp;
-			}
-
-			pCodecInfo = (ImageCodecInfo*)pCodecsBuffer;
-
-			if (GetImageEncoders(uNumEncoders, uSize, pCodecInfo) != Ok) {
-				delete pCodecsBuffer;
-				hr = STG_E_CANTSAVE;
-				goto CleanUp;
-			}
-
-			for (UINT i = 0; i < uNumEncoders; i++, pCodecInfo++) {
-				if (lstrcmp(pCodecInfo->MimeType, L"image/png") == 0) {
-					m_ClsidPNGEncoder = pCodecInfo->Clsid;
-					bFound = TRUE;
-					break;
-				}
-			}
-
-			delete pCodecsBuffer;
-
-			if (!bFound) {
-				hr = STG_E_CANTSAVE;
-				goto CleanUp;
-			}
-
-		}
-
-		if (cBitmap.Save(pStm, &m_ClsidPNGEncoder, NULL) != Ok) {
-			hr = STG_E_CANTSAVE;
-			goto CleanUp;
-		}
-
-		if (FAILED(hr = pStm->Stat(&tStat, STATFLAG_NONAME)))
-			goto CleanUp;
-
-		if (tStat.cbSize.QuadPart == 0 || tStat.cbSize.HighPart) {
-			hr = E_FAIL;
-			goto CleanUp;
-		}
-
-		pBuffer = new (std::nothrow) BYTE [tStat.cbSize.LowPart];
-		if (!pBuffer) {
-			hr = E_OUTOFMEMORY;
-			goto CleanUp;
-		}
-
-		liPos.QuadPart = 0;
-
-		if (FAILED(hr = pStm->Seek(liPos, STREAM_SEEK_SET, NULL)))
-			goto CleanUp;
-
-		if (FAILED(hr = pStm->Read(pBuffer, tStat.cbSize.LowPart, NULL)))
-			goto CleanUp;
-
-		if (FAILED(hr = pStream->Write(pBuffer, tStat.cbSize.LowPart, (ULONG*)pCbSize)))
-			goto CleanUp;
+		hr = m_pPicture->Save(pStream, fSaveMemCopy, pCbSize);
 
 	}
 
@@ -548,9 +383,6 @@ CleanUp:
 	if (pBuffer)
 		delete pBuffer;
 
-	if (pStm)
-		pStm->Release();
-
 	return hr;
 }
 
@@ -558,6 +390,8 @@ HRESULT STDMETHODCALLTYPE CPicture::Render(HDC hDC, LONG x, LONG y, LONG cx, LON
 										   OLE_XPOS_HIMETRIC xSrc, OLE_YPOS_HIMETRIC ySrc,
 										   OLE_XSIZE_HIMETRIC cxSrc, OLE_YSIZE_HIMETRIC cySrc,
 										   LPCRECT pRcWBounds) {
+	if (!m_pPicture)
+		return E_FAIL;
 
 	switch (GetObjectType(hDC)) {
 	case OBJ_DC:
@@ -575,41 +409,34 @@ HRESULT STDMETHODCALLTYPE CPicture::Render(HDC hDC, LONG x, LONG y, LONG cx, LON
 		if (NULL == (m_hDeskDc = CreateCompatibleDC(NULL)))
 			return E_OUTOFMEMORY;
 
+	// Prepare drawing in HIMETRIC units
 	SetMapMode(m_hDeskDc, MM_ANISOTROPIC);
 
 	SIZE szImgHimetric;
 
-	szImgHimetric.cx = PixelsToHimetricX(m_Width);
-	szImgHimetric.cy = PixelsToHimetricY(m_Height);
+	szImgHimetric.cx = PixelsToHimetricX(m_pPicture->GetWidth());
+	szImgHimetric.cy = PixelsToHimetricY(m_pPicture->GetHeight());
 
 	SetWindowOrgEx(m_hDeskDc, 0, 0, NULL);
 	SetWindowExtEx(m_hDeskDc, szImgHimetric.cx, szImgHimetric.cy, NULL);
 	SetViewportOrgEx(m_hDeskDc, 0, 0, NULL);
-	SetViewportExtEx(m_hDeskDc, m_Width, m_Height, NULL);
+	SetViewportExtEx(m_hDeskDc, m_pPicture->GetWidth(), m_pPicture->GetHeight(), NULL);
 
-	HBITMAP hOldBmp = (HBITMAP)SelectObject(m_hDeskDc, m_hBitmap);
+	HRESULT hr = m_pPicture->Draw(hDC, x, y, cx, cy, m_hDeskDc, xSrc, szImgHimetric.cy - ySrc, cxSrc, -cySrc);
 
-	BLENDFUNCTION bf;
-
-	bf.BlendOp = AC_SRC_OVER;
-	bf.BlendFlags = 0;
-	bf.SourceConstantAlpha = 255;
-	bf.AlphaFormat = AC_SRC_ALPHA;
-
-	AlphaBlend(hDC, x, y, cx, cy, m_hDeskDc, xSrc, szImgHimetric.cy - ySrc, cxSrc, -cySrc, bf);
-
-	SelectObject(m_hDeskDc, hOldBmp);
-
-	return S_OK;
+	return hr;
 }
 
+//
+// IPersistStream implementation
+//
 HRESULT STDMETHODCALLTYPE CPicture::GetClassID(CLSID *pclsid) {
 	
 	if (!pclsid)
 		return E_INVALIDARG;
 
 	// Return CLSID of server, it'll create picture objects
-	*pclsid = CLSID_PngPicture;
+	*pclsid = CLSID_ExtPicture;
 
 	return S_OK;
 
@@ -620,13 +447,16 @@ HRESULT STDMETHODCALLTYPE CPicture::IsDirty(void) {
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::Load(IStream *pStm) {
-	return LoadFromStream(pStm);
+	return LoadFromStream(pStm, TRUE, 0, 0, 0);
 }
 
 HRESULT STDMETHODCALLTYPE CPicture::Save(IStream *pStm, BOOL fClearDirty) {
 	HRESULT hr = S_OK;
 
-	hr = SaveAsFile(pStm, m_bKeepOriginalFormat, NULL);
+	if (!m_pPicture)
+		return E_UNEXPECTED;
+
+	hr = SaveAsFile(pStm, m_pPicture->GetOriginalStream() == NULL, NULL);
 
 	return hr;
 }
@@ -635,6 +465,9 @@ HRESULT STDMETHODCALLTYPE CPicture::GetSizeMax(ULARGE_INTEGER *pSize) {
 	return E_NOTIMPL;
 }
 
+// 
+// IConnectionPointContainer implementation
+//
 HRESULT STDMETHODCALLTYPE CPicture::EnumConnectionPoints(IEnumConnectionPoints **ppEnum) {
 	*ppEnum = FALSE;
 	return E_NOTIMPL;
@@ -645,6 +478,9 @@ HRESULT STDMETHODCALLTYPE CPicture::FindConnectionPoint(const IID &iid,IConnecti
 	return CONNECT_E_NOCONNECTION;
 }
 
+//
+// IDispatch implementation
+//
 HRESULT STDMETHODCALLTYPE CPicture::GetTypeInfoCount(UINT *pctinfo) {
 	*pctinfo = 1;
 	return S_OK;

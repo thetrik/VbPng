@@ -17,13 +17,14 @@
 volatile ULONG g_lCountOfUsers	= 0;			// Count of users
 BOOL g_bIsInitialized			= FALSE;		// If the module already intialized equals TRUE
 ULONG g_hGdipToken				= NULL;			// GDIplus token
-CHooker g_cHooker[2];							// Hooker object
+CHooker g_cHooker[3];							// Hooker object
 CPicturesServer g_cServer;						// Pictures server
 
 BOOL Initialize() {
 	HMODULE hOleAut				= NULL;
 	pfnOleLoadPictureEx pfnEx	= NULL;
 	pfnOleLoadPicture pfn 		= NULL;
+	pfnOleIconToCursor pfnITC	= NULL;
 	BOOL bComInit				= FALSE;
 	BOOL bGdipInit				= FALSE;
 	TCHAR pszAlreadyHooked[2];
@@ -69,18 +70,28 @@ BOOL Initialize() {
 		MessageBox(NULL, _T("Unable to get the OleLoadPictureEx address"), NULL, MB_ICONERROR);
 		goto CleanUp;
 	}
-	
+
 	// Get OleLoadPicture function address
 	if (NULL == (pfn = (pfnOleLoadPicture)GetProcAddress(hOleAut, "OleLoadPicture"))) {
 		MessageBox(NULL, _T("Unable to get the OleLoadPicture address"), NULL, MB_ICONERROR);
 		goto CleanUp;
 	}
 
-	// Register PNG server within process
+	// Get OleIconToCursor function address
+	if (NULL == (pfnITC = (pfnOleIconToCursor)GetProcAddress(hOleAut, "OleIconToCursor"))) {
+		MessageBox(NULL, _T("Unable to get the OleIconToCursor address"), NULL, MB_ICONERROR);
+		goto CleanUp;
+	}
+
+	// Register ExImage server within process
 	if (FAILED(g_cServer.RegisterServer())) {
 		MessageBox(NULL, _T("Unable to register PNG server"), NULL, MB_ICONERROR);
 		goto CleanUp;
 	}
+	
+	// Hijack OleIconToCursor
+	if (!g_cHooker[2].Hook(pfnITC, OleIconToCursor_user))
+		MessageBox(NULL, _T("Unable to intercept OleIconToCursor. Animated icons will be static"), NULL, MB_ICONERROR);
 
 	// Hijack OleLoadPictureEx, OleLoadPicture
 	if (g_cHooker[0].Hook(pfnEx, OleLoadPictureEx_user)) {
@@ -106,6 +117,7 @@ CleanUp:
 		// Revert
 		g_cHooker[0].Unhook();
 		g_cHooker[1].Unhook();
+		g_cHooker[2].Unhook();
 
 		if (bGdipInit)
 			GdiplusShutdown(g_hGdipToken);
@@ -127,6 +139,7 @@ VOID Uninitialize() {
 
 		g_cHooker[0].Unhook();
 		g_cHooker[1].Unhook();
+		g_cHooker[2].Unhook();
 
 		g_cServer.UnregisterServer();
 		
@@ -161,15 +174,29 @@ HRESULT __stdcall OleLoadPictureEx_user(
 				  DWORD    ySizeDesired,
 				  DWORD    dwFlags,
 				  LPVOID   *lplpvObj) {
-	HRESULT hr		= S_OK;
-	CPicture *cPic	= NULL;
+	HRESULT hr			= S_OK;
+	CPicture *cPic		= NULL;
+	IStream *pStm		= NULL;
+	LARGE_INTEGER liPos	= {0, 0};
+	ULARGE_INTEGER uiOrigin;
+
+	// Save stream position
+	if (FAILED(hr = lpstream->Seek(liPos, STREAM_SEEK_CUR, &uiOrigin)))
+		return hr;
 
 	pfnOleLoadPictureEx pfn = (pfnOleLoadPictureEx)g_cHooker[0].GetThunkPtr();
-	
+
 	// Call the original one
 	hr = pfn(lpstream, lSize, fRunmode, riid, xSizeDesired, ySizeDesired, dwFlags, lplpvObj);
 
 	if (FAILED(hr)) {
+
+		// Restore pointer
+
+		liPos.QuadPart = uiOrigin.QuadPart;
+
+		if (FAILED(hr = lpstream->Seek(liPos, STREAM_SEEK_SET, NULL)))
+			return hr;
 
 		cPic = new (std::nothrow) CPicture();
 
@@ -178,10 +205,7 @@ HRESULT __stdcall OleLoadPictureEx_user(
 			goto CleanUp;
 		}
 
-		if (FAILED(hr = cPic->put_KeepOriginalFormat(!fRunmode)))
-			goto CleanUp;
-
-		if (FAILED(hr = cPic->Load(lpstream)))
+		if (FAILED(hr = cPic->LoadFromStream(lpstream, !fRunmode, xSizeDesired, ySizeDesired, dwFlags)))
 			goto CleanUp;
 
 		if (FAILED(hr = cPic->QueryInterface(riid, lplpvObj)))
@@ -217,5 +241,25 @@ HRESULT __stdcall OleLoadPicture_user(
 		hr = OleLoadPictureEx_user(lpstream, lSize, fRunmode, riid, 0, 0, 0, lplpvObj);
 
 	return hr;
+
+}
+
+HICON __stdcall OleIconToCursor_user(
+				HINSTANCE hinstExe,
+				HICON     hIcon) {
+	HICON hRet = NULL;
+	CICOPicture *pAniIcon = g_cCursorsList.GetCursorFromHICON(hIcon);
+
+	// Extract animated icon
+	if (pAniIcon)
+		hRet = pAniIcon->GetAniCopy();
+
+	if (!hRet) {
+		// If this isn't our animated icon or extracting failed then call default implementation
+		pfnOleIconToCursor pfn = (pfnOleIconToCursor)g_cHooker[2].GetThunkPtr();
+		hRet = pfn(hinstExe, hIcon);
+	}
+
+	return hRet;
 
 }
